@@ -5,6 +5,7 @@ Handles base64 image decoding and OpenCV preprocessing (resize + CLAHE).
 
 import base64
 import logging
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -16,7 +17,7 @@ TARGET_WIDTH = 640
 TARGET_HEIGHT = 480
 
 
-def decode_base64_image(b64_string: str) -> np.ndarray | None:
+def decode_base64_image(b64_string: str) -> Optional[np.ndarray]:
     """Decode a base64-encoded JPEG/PNG string into a BGR NumPy array.
 
     Accepts both raw base64 and data-URI format (data:image/jpeg;base64,...).
