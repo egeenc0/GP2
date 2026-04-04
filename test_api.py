@@ -10,9 +10,13 @@ Kullanım:
 import base64
 import sys
 import json
+import io
 from pathlib import Path
 import urllib.request
 import urllib.error
+
+# Force UTF-8 output on Windows terminals
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 BASE_URL = "http://localhost:8000"
 
@@ -20,10 +24,10 @@ BASE_URL = "http://localhost:8000"
 def renkli(metin, kod):
     return f"\033[{kod}m{metin}\033[0m"
 
-yesil  = lambda m: renkli(m, "92")
+yesil   = lambda m: renkli(m, "92")
 kirmizi = lambda m: renkli(m, "91")
-sari   = lambda m: renkli(m, "93")
-kalin  = lambda m: renkli(m, "1")
+sari    = lambda m: renkli(m, "93")
+kalin   = lambda m: renkli(m, "1")
 
 
 # ─────────────────────────────────────────────────────────────
