@@ -11,9 +11,11 @@ POST /api/v1/detect   — accepts a base64 JPEG, returns detected objects,
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from detector import ObjectDetector
@@ -91,11 +93,31 @@ class DetectResponse(BaseModel):
     objects: list[DetectedObject]
     texts: list[str]
     guidance: str
+    frame_width: int = Field(
+        default=TARGET_WIDTH,
+        description="Bounding box koordinatlarının referans genişliği (piksel).",
+    )
+    frame_height: int = Field(
+        default=TARGET_HEIGHT,
+        description="Bounding box koordinatlarının referans yüksekliği (piksel).",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Static demo UI (same origin → no CORS issues)
+# ---------------------------------------------------------------------------
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+@app.get("/", include_in_schema=False)
+async def index_page() -> FileResponse:
+    """Simple browser UI to upload a photo and call /api/v1/detect."""
+    return FileResponse(_STATIC_DIR / "index.html")
+
+
 @app.get("/api/v1/health", summary="Health check")
 async def health() -> dict:
     """Return service status and model readiness flags."""
@@ -156,4 +178,6 @@ async def detect(request: DetectRequest) -> DetectResponse:
         objects=[DetectedObject(**obj) for obj in objects],
         texts=texts,
         guidance=guidance_text,
+        frame_width=TARGET_WIDTH,
+        frame_height=TARGET_HEIGHT,
     )
