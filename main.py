@@ -4,9 +4,11 @@ SceneSpeak FastAPI application.
 
 Endpoints
 ---------
-GET  /api/v1/health   — liveness check, reports model status
-POST /api/v1/detect   — accepts a base64 JPEG, returns detected objects,
-                        OCR text, and a spoken guidance string
+GET  /api/v1/health    — liveness check, reports model status
+POST /api/v1/detect    — accepts a base64 JPEG, returns detected objects,
+                         OCR text, and a spoken guidance string
+POST /api/v1/speak     — accepts {"text": "..."} and returns MP3 audio (edge-tts)
+POST /api/v1/detect-speak — detect + TTS in a single call, returns MP3 audio
 """
 
 import logging
@@ -15,13 +17,14 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from detector import ObjectDetector
 from guidance import generate_guidance
 from ocr import OCRReader
 from preprocessor import TARGET_HEIGHT, TARGET_WIDTH, decode_base64_image, preprocess
+from tts import DEFAULT_VOICE, FALLBACK_VOICE, synthesise
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -103,6 +106,20 @@ class DetectResponse(BaseModel):
     )
 
 
+class SpeakRequest(BaseModel):
+    text: str = Field(..., description="Seslendirilecek metin.")
+    voice: str = Field(
+        default=DEFAULT_VOICE,
+        description=f"edge-tts ses adı. Varsayılan: {DEFAULT_VOICE}. "
+                    f"Alternatif: {FALLBACK_VOICE}",
+    )
+
+
+class DetectSpeakRequest(BaseModel):
+    image: str = Field(..., description="Base64-encoded JPEG image.")
+    voice: str = Field(default=DEFAULT_VOICE, description="edge-tts ses adı.")
+
+
 # ---------------------------------------------------------------------------
 # Static demo UI (same origin → no CORS issues)
 # ---------------------------------------------------------------------------
@@ -181,3 +198,69 @@ async def detect(request: DetectRequest) -> DetectResponse:
         frame_width=TARGET_WIDTH,
         frame_height=TARGET_HEIGHT,
     )
+
+
+@app.post(
+    "/api/v1/speak",
+    summary="Metni MP3 ses dosyasına dönüştür (TTS)",
+    response_class=Response,
+    responses={
+        200: {"content": {"audio/mpeg": {}}, "description": "MP3 ses verisi"},
+        503: {"description": "TTS hazır değil (edge-tts kurulu değil veya ağ yok)"},
+    },
+)
+async def speak(request: SpeakRequest) -> Response:
+    """Verilen metni Türkçe Neural TTS ile MP3 olarak döndürür.
+
+    Flutter / Android istemcisi bu ses akışını doğrudan oynatabilir.
+    ```json
+    { "text": "Saat üç yönünde kişi var.", "voice": "tr-TR-EmelNeural" }
+    ```
+    """
+    audio = await synthesise(request.text, request.voice)
+    if not audio:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="TTS üretilemedi. İnternet bağlantısını ve edge-tts kurulumunu kontrol edin.",
+        )
+    return Response(content=audio, media_type="audio/mpeg")
+
+
+@app.post(
+    "/api/v1/detect-speak",
+    summary="Görüntüyü analiz et ve sesli rehberlik MP3'ünü döndür",
+    response_class=Response,
+    responses={
+        200: {"content": {"audio/mpeg": {}}, "description": "MP3 rehberlik sesi"},
+    },
+)
+async def detect_speak(request: DetectSpeakRequest) -> Response:
+    """Tek istekle: görüntü analizi + TTS → MP3 ses.
+
+    Flutter kameradan aldığı kareyi gönderir, doğrudan ses oynatır.
+    ```json
+    { "image": "<base64 JPEG>", "voice": "tr-TR-EmelNeural" }
+    ```
+    """
+    img = decode_base64_image(request.image)
+    if img is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Geçersiz base64 JPEG.")
+
+    processed = preprocess(img)
+
+    if not detector.is_loaded():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="Nesne dedektörü henüz hazır değil.")
+
+    objects = detector.detect(processed)
+    texts = ocr_reader.read(processed)
+    guidance_text = generate_guidance(objects, texts, TARGET_WIDTH, TARGET_HEIGHT)
+
+    logger.info("detect-speak() → %d objects | guidance: %r", len(objects), guidance_text)
+
+    audio = await synthesise(guidance_text, request.voice)
+    if not audio:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="TTS üretilemedi.")
+    return Response(content=audio, media_type="audio/mpeg")

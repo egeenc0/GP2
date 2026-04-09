@@ -316,7 +316,22 @@
         <input type="url" id="apiBase" placeholder="http://localhost:8000" autocomplete="off" />
       </div>
       <div class="settings-group">
-        <label for="speechRate">Konuşma hızı: <span id="speechRateVal">1</span></label>
+        <label for="ttsMode">Seslendirme modu</label>
+        <select id="ttsMode" style="width:100%;min-height:48px;padding:0.5rem 0.65rem;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:1rem;">
+          <option value="backend">Backend TTS — Microsoft Neural (Emel, Türkçe)</option>
+          <option value="browser">Tarayıcı TTS — Web Speech API (bağlantısız çalışır)</option>
+          <option value="backend-fallback" selected>Backend önce, hata olursa tarayıcı</option>
+        </select>
+      </div>
+      <div class="settings-group">
+        <label for="ttsVoice">Ses seçimi (Backend modda)</label>
+        <select id="ttsVoice" style="width:100%;min-height:48px;padding:0.5rem 0.65rem;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:1rem;">
+          <option value="tr-TR-EmelNeural" selected>Emel (kadın)</option>
+          <option value="tr-TR-AhmetNeural">Ahmet (erkek)</option>
+        </select>
+      </div>
+      <div class="settings-group">
+        <label for="speechRate">Tarayıcı TTS hızı: <span id="speechRateVal">1</span></label>
         <input type="range" id="speechRate" min="0.6" max="1.4" step="0.1" value="1" />
       </div>
       <div class="settings-group">
@@ -495,13 +510,60 @@
     return r ? parseFloat(r.value, 10) || 1 : 1;
   }
 
-  function speak(text) {
+  function getTtsMode() {
+    var s = document.getElementById("ttsMode");
+    return s ? s.value : "backend-fallback";
+  }
+
+  function getTtsVoice() {
+    var s = document.getElementById("ttsVoice");
+    return s ? s.value : "tr-TR-EmelNeural";
+  }
+
+  var _ttsAudio = null;
+
+  function speakBrowser(text) {
     if (!text || !window.speechSynthesis) return;
     window.speechSynthesis.cancel();
     var u = new SpeechSynthesisUtterance(text);
     u.lang = "tr-TR";
     u.rate = getSpeechRate();
     window.speechSynthesis.speak(u);
+  }
+
+  async function speakBackend(text) {
+    var root = apiRoot();
+    var url = (root || "") + "/api/v1/speak";
+    var r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text, voice: getTtsVoice() }),
+    });
+    if (!r.ok) throw new Error("TTS API hata: " + r.status);
+    var blob = await r.blob();
+    var objUrl = URL.createObjectURL(blob);
+    if (_ttsAudio) {
+      _ttsAudio.pause();
+      URL.revokeObjectURL(_ttsAudio.src);
+    }
+    _ttsAudio = new Audio(objUrl);
+    _ttsAudio.play();
+  }
+
+  function speak(text) {
+    if (!text) return;
+    var mode = getTtsMode();
+    if (mode === "browser") {
+      speakBrowser(text);
+    } else if (mode === "backend") {
+      speakBackend(text).catch(function (e) {
+        appendLog("TTS Hata", String(e.message || e));
+      });
+    } else {
+      speakBackend(text).catch(function () {
+        speakBrowser(text);
+      });
+    }
   }
 
   function maybeVibrate() {
@@ -786,6 +848,8 @@
   if (stored.apiBase) document.getElementById("apiBase").value = stored.apiBase;
   if (stored.speechRate) document.getElementById("speechRate").value = stored.speechRate;
   if (stored.scanInterval) document.getElementById("scanInterval").value = stored.scanInterval;
+  if (stored.ttsMode) document.getElementById("ttsMode").value = stored.ttsMode;
+  if (stored.ttsVoice) document.getElementById("ttsVoice").value = stored.ttsVoice;
   if (typeof stored.showVideo === "boolean") document.getElementById("showVideo").checked = stored.showVideo;
   if (typeof stored.showRaw === "boolean") document.getElementById("showRaw").checked = stored.showRaw;
   if (typeof stored.haptics === "boolean") document.getElementById("haptics").checked = stored.haptics;
@@ -797,12 +861,14 @@
       apiBase: document.getElementById("apiBase").value.trim(),
       speechRate: document.getElementById("speechRate").value,
       scanInterval: document.getElementById("scanInterval").value,
+      ttsMode: document.getElementById("ttsMode").value,
+      ttsVoice: document.getElementById("ttsVoice").value,
       showVideo: document.getElementById("showVideo").checked,
       showRaw: document.getElementById("showRaw").checked,
       haptics: document.getElementById("haptics").checked,
     }));
   }
-  ["apiBase", "speechRate", "scanInterval", "showVideo", "showRaw", "haptics"].forEach(function (id) {
+  ["apiBase", "speechRate", "scanInterval", "ttsMode", "ttsVoice", "showVideo", "showRaw", "haptics"].forEach(function (id) {
     var el = document.getElementById(id);
     if (el) el.addEventListener("change", persist);
     if (el && el.type === "url") el.addEventListener("blur", persist);
